@@ -1,0 +1,74 @@
+#!/bin/sh
+# Start/stop the Gammu SMSD.
+
+### BEGIN INIT INFO
+# Provides:          gammu_smsd
+# Required-Start:    $local_fs $remote_fs
+# Required-Stop:     $local_fs $remote_fs
+# Should-Start:      $network
+# Should-Stop:       $network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Gammu SMSD
+# Description:       Gammu SMSD is a SMS gateway.
+### END INIT INFO
+
+. /lib/lsb/init-functions
+
+PIDFILE=/opt/gammu/var/run/gammu_smsd.pid
+CONFIG=/opt/gammu/etc/gammu/gammu.conf
+DAEMON=/opt/gammu/sbin/gammu-smsd
+
+test -x $DAEMON || exit 0
+
+
+case "$1" in
+  start)
+    log_daemon_msg "Starting SMS gateway"
+    log_progress_msg "gammu_smsd"
+
+    if [ ! -f $PIDFILE ]
+    then
+        touch $PIDFILE
+        chown sms-gateway:root $PIDFILE
+    fi
+
+    start-stop-daemon --start --quiet --pidfile $PIDFILE \
+        --exec $DAEMON -- -c $CONFIG -p $PIDFILE --daemon -U sms-gateway -G dialout || true
+
+    log_end_msg 0
+    ;;
+
+  stop)
+    log_daemon_msg "Stopping SMS gateway"
+    log_progress_msg "gammu_smsd"
+    start-stop-daemon --stop --quiet \
+        --pidfile $PIDFILE --exec $DAEMON || true
+
+    if [ -f $PIDFILE ]
+    then
+        echo -n '' > $PIDFILE
+        chown sms-gateway:root $PIDFILE
+    fi
+
+    log_end_msg 0
+    ;;
+
+  reload)
+    # We don't have support for this yet.
+    exit 1
+    ;;
+
+  restart|force-reload)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+
+  *)
+    echo "Usage: $0 {start|stop|restart|force-reload}"
+    exit 1
+
+esac
+
+exit 0

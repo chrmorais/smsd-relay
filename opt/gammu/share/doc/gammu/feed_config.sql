@@ -1,0 +1,11 @@
+CREATE TABLE feeds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+  name TEXT NOT NULL,
+  keyword TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL,
+  url TEXT NOT NULL,
+  CHECK (method IN ('GET', 'POST'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_feeds_keyword ON feeds (keyword);
+
