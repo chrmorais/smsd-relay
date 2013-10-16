@@ -2,7 +2,7 @@
 # Start/stop the Gammu SMSD.
 
 ### BEGIN INIT INFO
-# Provides:          gammu_smsd
+# Provides:          smsd_gammu
 # Required-Start:    $local_fs $remote_fs
 # Required-Stop:     $local_fs $remote_fs
 # Should-Start:      $network
@@ -15,9 +15,10 @@
 
 . /lib/lsb/init-functions
 
-PIDFILE=/opt/gammu/var/run/gammu_smsd.pid
+PIDFILE=/opt/gammu/var/run/smsd_gammu.pid
 CONFIG=/opt/gammu/etc/gammu/gammu.conf
 DAEMON=/opt/gammu/sbin/gammu-smsd
+LOGDIR=/opt/gammu/var/log/gammu
 
 test -x $DAEMON || exit 0
 
@@ -27,10 +28,14 @@ case "$1" in
     log_daemon_msg "Starting SMS gateway"
     log_progress_msg "gammu_smsd"
 
-    if [ ! -f $PIDFILE ]
-    then
+    if [ ! -f $PIDFILE ] ; then
         touch $PIDFILE
         chown sms-gateway:root $PIDFILE
+    fi
+
+    if [ ! -d $LOGDIR ] ; then
+        mkdir -p $LOGDIR
+        chown sms-gateway:root $LOGDIR
     fi
 
     start-stop-daemon --start --quiet --pidfile $PIDFILE \
@@ -45,8 +50,7 @@ case "$1" in
     start-stop-daemon --stop --quiet \
         --pidfile $PIDFILE --exec $DAEMON || true
 
-    if [ -f $PIDFILE ]
-    then
+    if [ -f $PIDFILE ] ; then
         echo -n '' > $PIDFILE
         chown sms-gateway:root $PIDFILE
     fi

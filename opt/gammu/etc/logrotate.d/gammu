@@ -1,3 +1,12 @@
+/opt/gammu/var/log/gammu/smsc.log {
+    missingok
+    monthly
+    minsize 10k
+    create 0664 sms-gateway root
+    rotate 10
+    compress
+}
+
 /opt/gammu/var/log/gammu/smsd.log {
     missingok
     monthly
@@ -7,7 +16,7 @@
     compress
 }
 
-/opt/gammu/var/log/gammu/relay.log {
+/opt/gammu/var/log/gammu/smsr.log {
     missingok
     monthly
     minsize 10k
