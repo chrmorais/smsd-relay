@@ -7,6 +7,10 @@ import os, sys, time, copy, logging, atexit
 import urllib, urllib2
 import sqlite3 as dbs
 
+DB_ATTEMPTS_TIMEOUT = 6 # db connection should wait this time on db locked by another process
+DB_ATTEMPTS_SLEEP_MS = 100 # if can not do an action on db, wait this ms time before a new attempt
+DB_ATTEMPTS_MAX = 10 # the count of attempts for making an action on (SMS or feed) db
+
 def cleanup():
     logging.shutdown()
 
@@ -29,7 +33,7 @@ def get_db_path(part='sms'):
         param = '-c'
 
     if not param:
-        logging.error('Unknown db specifier: ' + str(part))
+        logging.error('unknown db specifier: ' + str(part))
         sys.exit(1)
 
     db_path = None
@@ -42,7 +46,7 @@ def get_db_path(part='sms'):
         db_path = sys.argv[index]
 
     if db_path is None:
-        logging.error('DB param was not given: ' + str(param))
+        logging.error('db param was not given: ' + str(param))
         sys.exit(1)
 
     if not os.path.exists(db_path):
@@ -54,22 +58,50 @@ def get_db_path(part='sms'):
     return db_path
 
 def get_db_conn(db_path):
-    try:
-        dbc = dbs.connect(db_path)
-    except:
-        logging.error('can not open db path: ' + str(db_path))
-        sys.exit(1)
-    if not dbc:
-        logging.error('db path could not be open: ' + str(db_path))
-        sys.exit(1)
-    try:
-        dbc.row_factory = dbs.Row
-    except:
-        logging.error('can not set db row factory: ' + str(db_path))
-        sys.exit(1)
-    return dbc
+    attempt = 0
+    while True:
+        attempt += 1
+        if attempt > DB_ATTEMPTS_MAX:
+            logging.error('can not provide db connection: ' + str(db_path))
+            sys.exit(1)
+
+        try:
+            dbc = dbs.connect(db_path, timeout=DB_ATTEMPTS_TIMEOUT)
+        except:
+            logging.warning('can not open db path: ' + str(db_path))
+            time.sleep(0.001 * DB_ATTEMPTS_SLEEP_MS)
+            continue
+        if not dbc:
+            logging.warning('db path could not be open: ' + str(db_path))
+            time.sleep(0.001 * DB_ATTEMPTS_SLEEP_MS)
+            continue
+        try:
+            dbc.row_factory = dbs.Row
+        except:
+            logging.warning('can not set db row factory: ' + str(db_path))
+            time.sleep(0.001 * DB_ATTEMPTS_SLEEP_MS)
+            continue
+
+        return dbc
 
 def get_url_paths():
+    db_path = get_db_path('config')
+
+    attempt = 0
+    while True:
+        attempt += 1
+        if attempt > DB_ATTEMPTS_MAX:
+            logging.error('can not take feed definitions: ' + str(db_path))
+            sys.exit(1)
+
+        url_paths = get_url_paths_inner()
+        if url_paths is False:
+            time.sleep(0.001 * DB_ATTEMPTS_SLEEP_MS)
+            continue
+
+        return url_paths
+
+def get_url_paths_inner():
     db_path = get_db_path('config')
     dbc = get_db_conn(db_path)
 
@@ -83,12 +115,29 @@ def get_url_paths():
                 break
             url_paths.append({'feed': one_feed['name'], 'key': one_feed['keyword'], 'method': one_feed['method'], 'url': one_feed['url']})
     except:
-        logging.error('Can not read URL paths: ' + str(db_path))
-        sys.exit(1)
+        logging.warning('can not read URL paths: ' + str(db_path))
+        return False
 
     return url_paths
 
 def get_messages():
+    db_path = get_db_path()
+
+    attempt = 0
+    while True:
+        attempt += 1
+        if attempt > DB_ATTEMPTS_MAX:
+            logging.error('can not take new messages: ' + str(db_path))
+            sys.exit(1)
+
+        messages = get_messages_inner()
+        if messages is False:
+            time.sleep(0.001 * DB_ATTEMPTS_SLEEP_MS)
+            continue
+
+        return messages
+
+def get_messages_inner():
     db_path = get_db_path()
     dbc = get_db_conn(db_path)
 
@@ -152,8 +201,8 @@ def get_messages():
                 current_sms = copy.deepcopy(empty_sms)
 
     except:
-        logging.error('can not read messages from db: ' + str(db_path))
-        sys.exit(1)
+        logging.warning('can not read messages from db: ' + str(db_path))
+        return False
 
     return messages
 
@@ -163,22 +212,42 @@ def send_message(method, url, params):
             resp = urllib2.urlopen(url)
             resp.read()
         except:
-            logging.warning('Can not (GET) relay message: ' + str(url))
+            logging.warning('can not (GET) relay message: ' + str(url))
             return False
         return True
 
     else:
         try:
+            for param_key in params:
+                params[param_key] = params[param_key].encode('utf8')
+
             post_data = urllib.urlencode(params)
             req = urllib2.Request(url, post_data)
             response = urllib2.urlopen(req)
             response.read()
         except:
-            logging.warning('Can not (POST) relay message: ' + str(url) + '\t' + str(params))
+            logging.warning('can not (POST) relay message: ' + str(url) + '\t' + str(params))
             return False
         return True
 
-def confirm_message(ids):
+def confirm_messages(ids):
+    db_path = get_db_path()
+
+    attempt = 0
+    while True:
+        attempt += 1
+        if attempt > DB_ATTEMPTS_MAX:
+            logging.error('can not set SMS as utilized: ' + str(db_path))
+            sys.exit(1)
+
+        confirmed = confirm_messages_inner(ids)
+        if confirmed is False:
+            time.sleep(0.001 * DB_ATTEMPTS_SLEEP_MS)
+            continue
+
+        return
+
+def confirm_messages_inner(ids):
     db_path = get_db_path()
     dbc = get_db_conn(db_path)
 
@@ -188,8 +257,10 @@ def confirm_message(ids):
             cur.execute('UPDATE inbox SET Processed = "true" WHERE ID = ?', (one_id,))
             dbc.commit()
     except:
-        logging.error('can not update messages: ' + str(db_path))
-        sys.exit(1)
+        logging.warning('can not update messages: ' + str(db_path))
+        return False
+
+    return True
 
 def process_messages():
 
@@ -210,9 +281,9 @@ def process_messages():
         orig_params = {'text': text, 'phone': phone, 'time': received, 'feed': ''}
 
         replacement = {}
-        replacement['text'] = urllib.quote_plus(text)
-        replacement['phone'] = urllib.quote_plus(phone)
-        replacement['time'] = urllib.quote_plus(received)
+        replacement['text'] = urllib.quote_plus(text.encode('utf8'))
+        replacement['phone'] = urllib.quote_plus(phone.encode('utf8'))
+        replacement['time'] = urllib.quote_plus(received.encode('utf8'))
 
         chosen_feed = None
         chosen_key = None
@@ -232,7 +303,7 @@ def process_messages():
             pass
 
         orig_params['feed'] = chosen_feed
-        replacement['feed'] = urllib.quote_plus(chosen_feed)
+        replacement['feed'] = urllib.quote_plus(chosen_feed.encode('utf8'))
 
         url_path = ''
         part_index = 1
@@ -247,7 +318,7 @@ def process_messages():
 
         res = send_message(chosen_method, url_path, orig_params)
         if res:
-            confirm_message(message['ids'])
+            confirm_messages(message['ids'])
 
 if __name__ == '__main__':
     atexit.register(cleanup)

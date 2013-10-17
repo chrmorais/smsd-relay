@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+#
+# Web server listening for requests to inject SMS into the Gammu SMSD spool
+#
 
 from BaseHTTPServer import HTTPServer
 from BaseHTTPServer import BaseHTTPRequestHandler
@@ -15,11 +18,20 @@ PHONE_NUMBER_PARAM = 'phone'
 MESSAGE_TEXT_PARAM = 'text'
 DEFAULT_HOME_DIR = '/tmp'
 DEAFULT_INJECT_NAME = 'gammu-smsd-inject'
-INJECT_OUTPUT_START = 'Written message with ID'
+DEFAULT_INJECT_OUTPUT_START = 'Written message with ID'
 
 class Parameters():
     def __init__(self):
         self.params = self.parse_params()
+
+        log_path = self.get_log_path()
+        log_level = logging.WARNING
+        if self.get_log_info():
+            log_level = logging.INFO
+        if log_path:
+            logging.basicConfig(filename=log_path, level=log_level, format='%(levelname)s [%(asctime)s] %(message)s')
+        else:
+            logging.basicConfig(level=log_level, format='%(levelname)s [%(asctime)s] %(message)s')
 
         if not self.params['config_path']:
             logging.error('config path not provided')
@@ -33,6 +45,9 @@ class Parameters():
 
         self.allowed_addresses = []
         self.setup_restrictions()
+
+        self.inject_result_matches = []
+        self.setup_inject_matching()
 
         test_inject = self.get_inject_command()
         if not test_inject:
@@ -83,19 +98,50 @@ class Parameters():
             sys.exit(1)
 
         try:
-            rh = open(self.params['restrict_path'])
+            fh = open(self.params['restrict_path'])
             while True:
-                one_line = rh.readline()
+                one_line = fh.readline()
                 if not one_line:
                     break
                 one_line = one_line.strip()
                 if (not one_line) or one_line.startswith('#'):
                     continue
                 self.allowed_addresses += [one_line]
-            rh.close()
+            fh.close()
         except Exception:
             logging.error('restrictions file not readable: ' + str(self.params['restrict_path']))
             sys.exit(1)
+
+    def setup_inject_matching(self):
+        self.inject_result_matches = []
+        if not self.params['inject_match_path']:
+            self.inject_result_matches = [DEFAULT_INJECT_OUTPUT_START]
+            return
+
+        if not os.path.exists(self.params['inject_match_path']):
+            logging.error('inject match path not found: ' + str(self.params['inject_match_path']))
+            sys.exit(1)
+        if not os.path.isfile(self.params['inject_match_path']):
+            logging.error('inject match path not file: ' + str(self.params['inject_match_path']))
+            sys.exit(1)
+
+        try:
+            fh = open(self.params['inject_match_path'])
+            while True:
+                one_line = fh.readline()
+                if not one_line:
+                    break
+                one_line = one_line.strip()
+                if (not one_line) or one_line.startswith('#'):
+                    continue
+                self.inject_result_matches += [one_line]
+            fh.close()
+        except Exception:
+            logging.error('inject match file not readable: ' + str(self.params['inject_match_path']))
+            sys.exit(1)
+
+        if not self.inject_result_matches:
+            self.inject_result_matches = [DEFAULT_INJECT_OUTPUT_START]
 
     def parse_params(self):
         keys1 = {
@@ -113,6 +159,7 @@ class Parameters():
             '-g': 'group_id',
             '-r': 'restrict_path',
             '-i': 'pid_path',
+            '-m': 'inject_match_path',
         }
 
         pars = {
@@ -128,6 +175,7 @@ class Parameters():
             'group_id': None,
             'restrict_path': None,
             'pid_path': None,
+            'inject_match_path': None,
         }
 
         current_option = None
@@ -197,14 +245,24 @@ class Parameters():
     def get_pid_path(self):
         return self.params['pid_path']
 
+    def is_inject_correct(self, output):
+        if not output:
+            return False
+
+        for one_line in output.split('\n'):
+            one_line = one_line.lstrip()
+            for one_match in self.inject_result_matches:
+                if one_line.startswith(one_match):
+                    return True
+
+        return False
+
     def is_ip_allowed(self, address):
         if not self.allowed_addresses:
             return True
         if address in self.allowed_addresses:
             return True
         return False
-
-params = Parameters()
 
 class RequestHandler(BaseHTTPRequestHandler):
     spec_phone = 'phone'
@@ -230,14 +288,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         p = sub.Popen(command_args, stdout=sub.PIPE, stderr=sub.PIPE)
         output, errors = p.communicate()
 
-        success = False
-        if not output:
-            output = ''
-        for one_line in output.split('\n'):
-            if one_line.lstrip().startswith(INJECT_OUTPUT_START):
-                success = True
-                break
-
+        success = params.is_inject_correct(output)
         if not success:
             return {'status': False, 'message': errors}
 
@@ -418,9 +469,9 @@ def daemonize(work_dir, pid_path):
         logging.warning('no pid file path provided')
     else:
         try:
-            ph = open(pid_path, 'w')
-            ph.write(str(os.getpid()))
-            ph.close()
+            fh = open(pid_path, 'w')
+            fh.write(str(os.getpid()) + '\n')
+            fh.close()
         except Exception:
             logging.error('can not create pid file: ' + str(pid_path))
             sys.exit(1)
@@ -453,9 +504,9 @@ def cleanup():
     pid_path = params.get_pid_path()
     if pid_path is not None:
         try:
-            ph = open(pid_path, 'w')
-            ph.write('')
-            ph.close()
+            fh = open(pid_path, 'w')
+            fh.write('')
+            fh.close()
         except Exception:
             logging.warning('can not clean pid file: ' + str(pid_path))
 
@@ -479,16 +530,8 @@ def run_server(ip_address, port):
     httpd.serve_forever()
 
 if __name__ == "__main__":
+    params = Parameters()
     atexit.register(cleanup)
-
-    log_path = params.get_log_path()
-    log_level = logging.WARNING
-    if params.get_log_info():
-        log_level = logging.INFO
-    if log_path:
-        logging.basicConfig(filename=log_path, level=log_level, format='%(levelname)s [%(asctime)s] %(message)s')
-    else:
-        logging.basicConfig(level=log_level, format='%(levelname)s [%(asctime)s] %(message)s')
 
     signal.signal(signal.SIGTERM, exit_handler)
     signal.signal(signal.SIGINT, exit_handler)

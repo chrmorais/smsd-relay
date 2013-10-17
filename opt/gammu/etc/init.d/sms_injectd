@@ -1,31 +1,32 @@
 #!/bin/sh
-# Start/stop the SMS web control.
+# Start/stop the SMS injectd.
 
 ### BEGIN INIT INFO
-# Provides:          smsc_web
+# Provides:          sms_injectd
 # Required-Start:    $local_fs $remote_fs
 # Required-Stop:     $local_fs $remote_fs
 # Should-Start:      $network
 # Should-Stop:       $network
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: SMS web control
-# Description:       web server for SMS relay managing
+# Short-Description: SMS injectd
+# Description:       web server for SMS injecting
 ### END INIT INFO
 
 . /lib/lsb/init-functions
 
-DAEMON=/opt/gammu/sbin/sms_web_control.py
+DAEMON=/opt/gammu/sbin/sms_injectd.py
 INJECTPATH=/opt/gammu/bin/gammu-smsd-inject
 
 CONFIG=/opt/gammu/etc/gammu/gammu.conf
-ALLOWED=/opt/gammu/etc/gammu/allowed_ips.txt
+ALLOWED=/opt/gammu/etc/gammu/allowed_ips.list
+INJECTMATCH=/opt/gammu/etc/gammu/inject_matches.list
 
-PIDFILE=/opt/gammu/var/run/smsc_web.pid
+PIDFILE=/opt/gammu/var/run/sms_injectd.pid
 HOMEDIR=/opt/gammu/var/log/gammu
 
 LOGDIR=/opt/gammu/var/log/gammu
-LOGFILE=/opt/gammu/var/log/gammu/smsc.log
+LOGFILE=/opt/gammu/var/log/gammu/sms_injectd.log
 
 ADDRESS=127.0.0.1
 PORT=9045
@@ -36,8 +37,8 @@ test -x $INJECTPATH || exit 0
 
 case "$1" in
   start)
-    log_daemon_msg "Starting SMS web control"
-    log_progress_msg "sms_webc"
+    log_daemon_msg "Starting SMS injectd"
+    log_progress_msg "sms_injectd"
 
     if [ ! -d $LOGDIR ] ; then
         mkdir -p $LOGDIR
@@ -46,14 +47,14 @@ case "$1" in
 
     start-stop-daemon --start --quiet --pidfile $PIDFILE \
         --startas $DAEMON -- -c $CONFIG -r $ALLOWED -i $PIDFILE -d -f -u sms-gateway -g dialout \
-        -h $HOMEDIR -l $LOGFILE -s $INJECTPATH -a $ADDRESS -p $PORT || true
+        -h $HOMEDIR -l $LOGFILE -s $INJECTPATH -m $INJECTMATCH -a $ADDRESS -p $PORT || true
 
     log_end_msg 0
     ;;
 
   stop)
-    log_daemon_msg "Stopping SMS web control"
-    log_progress_msg "sms_webc"
+    log_daemon_msg "Stopping SMS injectd"
+    log_progress_msg "sms_injectd"
     start-stop-daemon --stop --quiet \
         --pidfile $PIDFILE || true
 

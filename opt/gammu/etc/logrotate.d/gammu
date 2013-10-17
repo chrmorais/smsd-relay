@@ -1,4 +1,4 @@
-/opt/gammu/var/log/gammu/smsc.log {
+/opt/gammu/var/log/gammu/smsd_gammu.log {
     missingok
     monthly
     minsize 10k
@@ -7,7 +7,7 @@
     compress
 }
 
-/opt/gammu/var/log/gammu/smsd.log {
+/opt/gammu/var/log/gammu/sms_relay.log {
     missingok
     monthly
     minsize 10k
@@ -16,7 +16,7 @@
     compress
 }
 
-/opt/gammu/var/log/gammu/smsr.log {
+/opt/gammu/var/log/gammu/sms_injectd.log {
     missingok
     monthly
     minsize 10k
@@ -24,5 +24,4 @@
     rotate 10
     compress
 }
-
 

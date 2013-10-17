@@ -1,1 +1,1 @@
-This 'lib/gammu' directory has to be owned by the sms-gateway user.
+This 'lib/gammu' directory and its content have to be owned by the sms-gateway user.
