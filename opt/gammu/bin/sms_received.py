@@ -4,6 +4,7 @@
 #
 
 import os, sys, time, copy, logging, atexit
+import fcntl
 import urllib, urllib2
 import sqlite3 as dbs
 
@@ -11,15 +12,76 @@ DB_ATTEMPTS_TIMEOUT = 6 # db connection should wait this time on db locked by an
 DB_ATTEMPTS_SLEEP_MS = 100 # if can not do an action on db, wait this ms time before a new attempt
 DB_ATTEMPTS_MAX = 10 # the count of attempts for making an action on (SMS or feed) db
 
+LOCK_ATTEMPTS_SLEEP_MS = 1000 # if can not acquire exclusive lock, wait this ms time before a new attempt
+LOCK_ATTEMPTS_MAX = 60 # the count of attempts for acquiring a lock-file
+
+lock_file = None
+
 def cleanup():
+    global lock_file
+
+    if lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+        except:
+            pass
+        try:
+            lock_file.close()
+        except:
+            pass
+
     logging.shutdown()
+
+def get_lock_path():
+    lock_path = None
+    index = 0
+    for one_arg in sys.argv:
+        index += 1
+        if one_arg == '-l':
+            break
+    if index < len(sys.argv):
+        lock_path = sys.argv[index]
+    return lock_path
+
+def get_lock_file(lock_path):
+    if not lock_path:
+        return None
+
+    try:
+        lock_file = open(lock_path, 'w')
+    except:
+        logging.error('can not open lock path: ' + str(lock_path))
+        sys.exit(1)
+
+    attempt = 0
+    while True:
+        attempt += 1
+        if attempt > LOCK_ATTEMPTS_MAX:
+            try:
+                lock_file.close()
+            except:
+                pass
+            logging.error('can not acquire lock file: ' + str(lock_path))
+            sys.exit(1)
+
+        got_lock = False
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            got_lock = True
+        except:
+            got_lock = False
+        if got_lock:
+            break
+        time.sleep(0.001 * LOCK_ATTEMPTS_SLEEP_MS)
+
+    return lock_file
 
 def get_log_path():
     log_path = None
     index = 0
     for one_arg in sys.argv:
         index += 1
-        if one_arg == '-l':
+        if one_arg == '-g':
             break
     if index < len(sys.argv):
         log_path = sys.argv[index]
@@ -321,6 +383,8 @@ def process_messages():
             confirm_messages(message['ids'])
 
 if __name__ == '__main__':
+    lock_file = get_lock_file(get_lock_path())
+
     atexit.register(cleanup)
     log_path = get_log_path()
     if log_path:
