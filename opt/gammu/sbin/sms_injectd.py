@@ -5,20 +5,25 @@
 
 from BaseHTTPServer import HTTPServer
 from BaseHTTPServer import BaseHTTPRequestHandler
-import sys, os, time, atexit, signal, logging
+import sys, os, time, atexit, signal, logging, json
 import resource, urlparse, cgi
 import subprocess as sub
 import pwd, grp
 
 DEFAULT_ADDRESS = '127.0.0.1'
 DEFAULT_PORT = 9045
-SMS_SEND_PATH = '/send_sms'
-UNICODE_SMS_SEND_PATH = '/send_sms/unicode'
+SMS_SEND_PATH = '/deliver/sms/simple/text'
+UNICODE_SMS_SEND_PATH = '/deliver/sms/simple/unicode'
+JSON_SMS_SEND_PATH = '/deliver/sms/packed/text'
+JSON_UNICODE_SMS_SEND_PATH = '/deliver/sms/packed/unicode'
 PHONE_NUMBER_PARAM = 'phone'
 MESSAGE_TEXT_PARAM = 'text'
+CHECKCODE_TEXT_PARAM = 'pass'
 DEFAULT_HOME_DIR = '/tmp'
 DEAFULT_INJECT_NAME = 'gammu-smsd-inject'
 DEFAULT_INJECT_OUTPUT_START = 'Written message with ID'
+
+params = None
 
 class Parameters():
     def __init__(self):
@@ -83,6 +88,27 @@ class Parameters():
                 except:
                     logging.error('can not find the specified group: ' + str(requested_group_name))
                     sys.exit(1)
+
+    def setup_secrets(self):
+        if not self.params['sms_secret_path']:
+            return
+        self.params['sms_secret'] = []
+
+        try:
+            fh = open(self.params['sms_secret_path'])
+            while True:
+                one_line = fh.readline()
+                if not one_line:
+                    break
+                one_line = one_line.strip()
+                if not one_line:
+                    continue
+                if one_line.startswith('#'):
+                    continue
+                self.params['sms_secret'].append(one_line)
+            fh.close()
+        except:
+            pass
 
     def setup_restrictions(self):
         self.allowed_addresses = []
@@ -150,6 +176,7 @@ class Parameters():
         }
         keys2 = {
             '-s': 'sms_inject_path',
+            '-e': 'sms_secret_path',
             '-l': 'log_path',
             '-c': 'config_path',
             '-a': 'address',
@@ -164,6 +191,8 @@ class Parameters():
 
         pars = {
             'sms_inject_path': None,
+            'sms_secret_path': None,
+            'sms_secret': None,
             'log_info': False,
             'log_path': None,
             'config_path': None,
@@ -206,6 +235,9 @@ class Parameters():
                     inject_command = inject_path_test
                     break
         return inject_command
+
+    def get_sms_secret(self):
+        return self.params['sms_secret']
 
     def get_log_info(self):
         return self.params['log_info']
@@ -268,6 +300,44 @@ class RequestHandler(BaseHTTPRequestHandler):
     spec_phone = 'phone'
     spec_text = 'text'
 
+    def _read_form(self):
+        parsed_path = urlparse.urlparse(self.path)
+
+        content_type = ''
+        if self.headers and ('Content-Type' in self.headers):
+            content_type = self.headers['Content-Type']
+        environment = {'REQUEST_METHOD':'POST', 'CONTENT_TYPE':content_type}
+        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=environment)
+
+        return form
+
+    def _read_json(self):
+        parsed_path = urlparse.urlparse(self.path)
+
+        content_length = 0
+        if self.headers and ('Content-Length' in self.headers):
+            try:
+                content_length = int(self.headers.getheader('Content-Length'))
+            except:
+                content_length = 0
+
+        content_type = ''
+        if self.headers and ('Content-Type' in self.headers):
+            content_type = self.headers.getheader('Content-Type')
+
+        content_type_value, content_type_params = cgi.parse_header(content_type)
+        try:
+            req_post_data = self.rfile.read(content_length)
+        except:
+            req_post_data = None
+
+        try:
+            data = json.loads(req_post_data)
+        except:
+            data = None
+
+        return data
+
     def log_message(self, format, *args):
         message = "%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format%args)
         logging.info(message.strip())
@@ -299,7 +369,99 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         return {'status': True}
 
-    def process_sms(self, system, form):
+    def process_sms_packed(self, system_set, data):
+        set_secret = system_set['secret']
+
+        if not data:
+            return {'status':'400', 'message':'no (json) data provided'}
+        if type(data) is not dict:
+            return {'status':'400', 'message':'data provided in wrong format'}
+
+        if set_secret is not None:
+            if 'secret' not in data:
+                return {'status':'401', 'message':'secret not provided'}
+            if data['secret'] not in set_secret:
+                return {'status':'401', 'message':'wrong secret provided'}
+
+        if ('message' not in data) or (not data['message']):
+            return {'status':'400', 'message':'message not provided'}
+        send_message = data['message']
+
+        use_phone_numbers = []
+        if ('recipients' not in data) or (not data['recipients']) or (type(data['recipients']) not in (list, tuple)):
+            return {'status':'400', 'message':'recipients not provided'}
+        for one_recipient in data['recipients']:
+            if type(one_recipient) is not dict:
+                continue
+            if ('type' not in one_recipient) or (one_recipient['type'] != 'address'):
+                continue
+            if ('value' not in one_recipient) or (not one_recipient['value']):
+                continue
+            use_phone_numbers.append(one_recipient['value'])
+        if not use_phone_numbers:
+            return {'status':'400', 'message':'no recipient address provided'}
+
+        delivered = []
+        err_notices = []
+
+        use_unicode = system_set['use_unicode']
+        max_len = system_set['max_len']
+        multipart = False
+        if len(send_message) > max_len:
+            multipart = True
+
+        for one_phone_number in use_phone_numbers:
+            try:
+                one_phone_number = str(one_phone_number)
+            except:
+                err_notices.append('a wrong phone number')
+                continue
+
+            try:
+                message_info = {
+                    self.spec_phone: one_phone_number,
+                    self.spec_text: send_message,
+                }
+                res = self.send_sms(multipart, use_unicode, message_info)
+                if res and ('status' in res) and res['status']:
+                    delivered.append(one_phone_number)
+                else:
+                    err_notices.append('can not deliver to ' + one_phone_number)
+            except Exception as exc:
+                notice = 'an error during SMS sending to ' + one_phone_number
+                if hasattr(exc, 'message') and exc.message:
+                    notice += ': ' + str(exc.message)
+                err_notices.append(notice)
+
+        ret_data = {}
+        if delivered:
+            ret_data['status'] = '200'
+        else:
+            ret_data['status'] = '400'
+        if err_notices:
+            ret_data['message'] = '\r\n'.join(err_notices)
+        else:
+            ret_data['message'] = 'no failure detected'
+        ret_data['delivered'] = delivered
+
+        return ret_data
+
+    def process_sms_simple(self, system_set, data):
+        set_secret = system_set['secret']
+
+        if set_secret is not None:
+            got_secret = None
+            if CHECKCODE_TEXT_PARAM in form.keys():
+                got_secret_info = form[CHECKCODE_TEXT_PARAM]
+                if got_secret_info.filename:
+                    got_secret = got_secret_info.file.read()
+                else:
+                    got_secret = got_secret_info.value
+            if not got_secret:
+                return {'status':'400', 'message':'missing "' + CHECKCODE_TEXT_PARAM + '" part'}
+            if got_secret not in set_secret:
+                return {'status':'400', 'message':'incorect checkcode parameter'}
+
         use_keys = {PHONE_NUMBER_PARAM: self.spec_phone, MESSAGE_TEXT_PARAM: self.spec_text}
         message_info = {self.spec_phone:None, self.spec_text:None}
         phone_number = None
@@ -321,13 +483,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 logging.warning('can not use sms: missing ' + part + ' part')
                 return {'status':'400', 'message':'missing ' + part + ' part'}
 
-        max_len = 160 # 7-bit encoding
-        use_unicode = False
+        use_unicode = system_set['use_unicode']
+        max_len = system_set['max_len']
         multipart = False
-        if system and ('bits' in system) and (16 == system['bits']):
-            max_len = 70 # 16-bit unicode
-            use_unicode = True
-
         if len(message_info[self.spec_text]) > max_len:
             multipart = True
 
@@ -359,7 +517,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             warning_msg += ':' + str(message_info[self.spec_text])
             logging.warning(warning_msg)
 
-            return {'status':'500', 'message':notice}
+            return {'status':'400', 'message':notice}
 
         return {'status':'200', 'message':'sms sent'}
 
@@ -378,41 +536,72 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-        self.wfile.write('use ' + SMS_SEND_PATH + ' for standard sms sending\r\n')
+        self.wfile.write('use ' + SMS_SEND_PATH + ' for ascii sms sending\r\n')
         self.wfile.write('use ' + UNICODE_SMS_SEND_PATH + ' for unicode sms sending\r\n')
+        self.wfile.write('use ' + JSON_SMS_SEND_PATH + ' for ascii sms sending in packed way\r\n')
+        self.wfile.write('use ' + JSON_UNICODE_SMS_SEND_PATH + ' for unicode sms sending in packed way\r\n')
 
         return
 
     def do_POST(self):
+        global params
+
         if not params.is_ip_allowed(str(self.client_address[0])):
             self.send_error(403)
             return
 
-        parsed_path = urlparse.urlparse(self.path)
+        set_secret = None
+        if params:
+            set_secret = params.get_sms_secret()
 
-        content_type = ''
-        if self.headers and ('Content-Type' in self.headers):
-            content_type = self.headers['Content-Type']
-        environment = {'REQUEST_METHOD':'POST', 'CONTENT_TYPE':content_type}
-        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=environment)
+        use_unicode = False
+        bit_len = 7
+        max_len = 160 # 7-bit encoding
+        if parsed_path.path.startswith(UNICODE_SMS_SEND_PATH) or parsed_path.path.startswith(JSON_UNICODE_SMS_SEND_PATH):
+            use_unicode = True
+            bit_len = 16
+            max_len = 70 # 16-bit unicode
+
+        system_set = {'bits':bit_len, 'max_len':max_len, 'use_unicode':use_unicode, 'secret':set_secret}
+
+        use_simple = False
+        use_packed = False
+        if parsed_path.path.startswith(UNICODE_SMS_SEND_PATH):
+            use_simple = True
+        if parsed_path.path.startswith(SMS_SEND_PATH):
+            use_simple = True
+        if parsed_path.path.startswith(JSON_UNICODE_SMS_SEND_PATH):
+            use_packed = True
+        if parsed_path.path.startswith(JSON_SMS_SEND_PATH):
+            use_packed = True
 
         ret = None
-        if parsed_path.path.startswith(UNICODE_SMS_SEND_PATH):
-            system = {'bits':16}
-            ret = self.process_sms(system, form)
-        elif parsed_path.path.startswith(SMS_SEND_PATH):
-            system = {'bits':7}
-            ret = self.process_sms(system, form)
-        if (not ret) or (not 'status' in ret) or (not ret['status']):
+        if use_simple:
+            form_data = self._read_form()
+            ret = self.process_sms_simple(system_set, form_data)
+        if use_packed:
+            json_data = self._read_json()
+            ret = self.process_sms_packed(system_set, json_data)
+
+        if (not ret) or (type(ret) is not dict) or (not 'status' in ret) or (not ret['status']):
             self.send_error(404)
             return
 
         self.send_response(int(ret['status']))
         self.end_headers()
 
-        if 'message' in ret:
-            self.wfile.write(ret['message'])
-            self.wfile.write('\n')
+        if use_packed:
+            if 'delivered' in ret:
+                to_ret = json.dumps({'message': ret['message'], 'delivered': ret['delivered']})
+            else:
+                to_ret = ret['message']
+            self.wfile.write(to_ret)
+            self.wfile.write('\r\n')
+
+        else:
+            if 'message' in ret:
+                self.wfile.write(ret['message'])
+                self.wfile.write('\r\n')
 
         return
 

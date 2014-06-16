@@ -17,6 +17,7 @@
 
 DAEMON=/opt/gammu/sbin/sms_injectd.py
 INJECTPATH=/opt/gammu/bin/gammu-smsd-inject
+PATHSECRET=/opt/gammu/etc/gammu/sms_secret.list
 
 CONFIG=/opt/gammu/etc/gammu/gammu.conf
 ALLOWED=/opt/gammu/etc/gammu/allowed_ips.list
@@ -47,7 +48,7 @@ case "$1" in
 
     start-stop-daemon --start --quiet --pidfile $PIDFILE \
         --startas $DAEMON -- -c $CONFIG -r $ALLOWED -i $PIDFILE -d -f -u sms-gateway -g dialout \
-        -h $HOMEDIR -l $LOGFILE -s $INJECTPATH -m $INJECTMATCH -a $ADDRESS -p $PORT || true
+        -h $HOMEDIR -l $LOGFILE -s $INJECTPATH -e $PATHSECRET -m $INJECTMATCH -a $ADDRESS -p $PORT || true
 
     log_end_msg 0
     ;;
