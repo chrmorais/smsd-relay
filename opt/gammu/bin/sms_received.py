@@ -8,6 +8,11 @@ import fcntl
 import urllib, urllib2
 import sqlite3 as dbs
 
+REPLACE_TEXT = '<<text>>'
+REPLACE_PHONE = '<<phone>>'
+REPLACE_TIME = '<<time>>'
+REPLACE_FEED = '<<feed>>'
+
 DB_ATTEMPTS_TIMEOUT = 6 # db connection should wait this time on db locked by another process
 DB_ATTEMPTS_SLEEP_MS = 100 # if can not do an action on db, wait this ms time before a new attempt
 DB_ATTEMPTS_MAX = 10 # the count of attempts for making an action on (SMS or feed) db
@@ -268,7 +273,7 @@ def get_messages_inner():
 
     return messages
 
-def send_message(method, url, params):
+def send_message(method, url):
     if 'GET' == method:
         try:
             resp = urllib2.urlopen(url)
@@ -278,13 +283,11 @@ def send_message(method, url, params):
             return False
         return True
 
-    else:
+    else: # 'POST' method
         try:
-            for param_key in params:
-                params[param_key] = params[param_key].encode('utf8')
-
-            post_data = urllib.urlencode(params)
-            req = urllib2.Request(url, post_data)
+            url_parts = url.split('?')
+            post_data = '?'.join(url_parts[1:])
+            req = urllib2.Request(url_parts[0], post_data, {'Content-Type': 'application/x-www-form-urlencoded'})
             response = urllib2.urlopen(req)
             response.read()
         except:
@@ -325,6 +328,8 @@ def confirm_messages_inner(ids):
     return True
 
 def process_messages():
+    # we set the values in the urls for both GET and POST methods,
+    # and then we move the params into body for POST requests
 
     for message in get_messages():
         if not message['text']:
@@ -340,7 +345,6 @@ def process_messages():
 
         text = message['text']
         phone = message['phone']
-        orig_params = {'text': text, 'phone': phone, 'time': received, 'feed': ''}
 
         replacement = {}
         replacement['text'] = urllib.quote_plus(text.encode('utf8'))
@@ -361,24 +365,23 @@ def process_messages():
                     chosen_url = one_path['url']
 
         if chosen_feed is None:
-            log_issue('No feed for SMS: ' + str(orig_params['text']))
+            log_issue('No feed for SMS: ' + str(message['text']))
             pass
 
-        orig_params['feed'] = chosen_feed
         replacement['feed'] = urllib.quote_plus(chosen_feed.encode('utf8'))
 
-        url_path = ''
-        part_index = 1
-        for url_part in chosen_url.split('%%'):
-            part_index = 1 - part_index
-            if 1 == part_index:
-                if url_part in replacement:
-                    url_part = replacement[url_part]
-                else:
-                    url_part = '%%' + url_part + '%%'
-            url_path += url_part
+        replacements = [
+            [REPLACE_TEXT, replacement['text']],
+            [REPLACE_PHONE, replacement['phone']],
+            [REPLACE_TIME, replacement['time']],
+            [REPLACE_FEED, replacement['feed']],
+        ]
 
-        res = send_message(chosen_method, url_path, orig_params)
+        use_url = chosen_url
+        for replace_from, replace_to in replacements:
+            use_url = use_url.replace(replace_from, replace_to)
+
+        res = send_message(chosen_method, url_path)
         if res:
             confirm_messages(message['ids'])
 
