@@ -381,7 +381,7 @@ def process_messages():
         for replace_from, replace_to in replacements:
             use_url = use_url.replace(replace_from, replace_to)
 
-        res = send_message(chosen_method, url_path)
+        res = send_message(chosen_method, use_url)
         if res:
             confirm_messages(message['ids'])
 

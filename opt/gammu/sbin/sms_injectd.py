@@ -557,7 +557,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         use_unicode = False
         bit_len = 7
         max_len = 160 # 7-bit encoding
-        if parsed_path.path.startswith(UNICODE_SMS_SEND_PATH) or parsed_path.path.startswith(JSON_UNICODE_SMS_SEND_PATH):
+        if self.path.startswith(UNICODE_SMS_SEND_PATH) or self.path.startswith(JSON_UNICODE_SMS_SEND_PATH):
             use_unicode = True
             bit_len = 16
             max_len = 70 # 16-bit unicode
@@ -566,13 +566,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         use_simple = False
         use_packed = False
-        if parsed_path.path.startswith(UNICODE_SMS_SEND_PATH):
+        if self.path.startswith(UNICODE_SMS_SEND_PATH):
             use_simple = True
-        if parsed_path.path.startswith(SMS_SEND_PATH):
+        if self.path.startswith(SMS_SEND_PATH):
             use_simple = True
-        if parsed_path.path.startswith(JSON_UNICODE_SMS_SEND_PATH):
+        if self.path.startswith(JSON_UNICODE_SMS_SEND_PATH):
             use_packed = True
-        if parsed_path.path.startswith(JSON_SMS_SEND_PATH):
+        if self.path.startswith(JSON_SMS_SEND_PATH):
             use_packed = True
 
         ret = None
