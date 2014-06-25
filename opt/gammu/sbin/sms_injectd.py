@@ -50,6 +50,7 @@ class Parameters():
 
         self.allowed_addresses = []
         self.setup_restrictions()
+        self.setup_secrets()
 
         self.inject_result_matches = []
         self.setup_inject_matching()
@@ -451,8 +452,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if set_secret is not None:
             got_secret = None
-            if CHECKCODE_TEXT_PARAM in form.keys():
-                got_secret_info = form[CHECKCODE_TEXT_PARAM]
+            if CHECKCODE_TEXT_PARAM in data.keys():
+                got_secret_info = data[CHECKCODE_TEXT_PARAM]
                 if got_secret_info.filename:
                     got_secret = got_secret_info.file.read()
                 else:
@@ -467,12 +468,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         phone_number = None
         message_text = ''
 
-        for field in form.keys():
+        for field in data.keys():
             if field not in use_keys:
                 continue
 
             field_key = use_keys[field]
-            field_item = form[field]
+            field_item = data[field]
             if field_item.filename:
                 message_info[field_key] = field_item.file.read()
             else:
