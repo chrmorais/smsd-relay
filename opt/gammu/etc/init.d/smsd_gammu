@@ -71,7 +71,7 @@ case "$1" in
 
   restart|force-reload)
     $0 stop
-    sleep 1
+    sleep 5
     $0 start
     ;;
 
