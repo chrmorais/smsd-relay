@@ -5,6 +5,7 @@
     create 0664 sms-gateway root
     rotate 10
     compress
+    delaycompress
 }
 
 /opt/gammu/var/log/gammu/sms_relay.log {
@@ -14,6 +15,7 @@
     create 0664 sms-gateway root
     rotate 10
     compress
+    delaycompress
 }
 
 /opt/gammu/var/log/gammu/sms_injectd.log {
@@ -23,5 +25,9 @@
     create 0664 sms-gateway root
     rotate 10
     compress
+    delaycompress
+    postrotate
+        [ ! -s /opt/gammu/var/run/sms_injectd.pid ] || /opt/gammu/etc/init.d/sms_injectd restart
+    endscript
 }
 
